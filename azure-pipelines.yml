@@ -1,0 +1,294 @@
+trigger:
+- main
+
+pool:
+  name: self-hosted-agent
+  
+variables:
+  resourceGroup: 'rg-nyc-taxi'
+  dataFactoryName: 'adf-nyc-taxi-25'
+  pipelineName: 'CopyNYCTaxiData'
+  storageAccountName: 'nyctaxistoragedataops'
+  synapseSQLEndpoint: 'synapse-nyctaxi-test.sql.azuresynapse.net'
+
+stages:
+- stage: RunADFPipeline
+  displayName: '🚀 Trigger Azure Data Factory Pipeline'
+  jobs:
+  - job: RunADFPipeline
+    steps:
+    - task: AzureCLI@2
+      displayName: 'Trigger & Monitor ADF Pipeline'
+      inputs:
+        azureSubscription: 'AzureServiceConnection'
+        scriptType: 'bash'
+        scriptLocation: inlineScript
+        inlineScript: | 
+          # Trigger pipeline
+          runId=$(az datafactory pipeline create-run \
+            --factory-name "$(dataFactoryName)" \
+            --resource-group "$(resourceGroup)" \
+            --name "$(pipelineName)" \
+            --query 'runId' -o tsv)
+          
+          echo "##vso[task.setvariable variable=ADF_RUN_ID]$runId"
+          echo "ADF Pipeline Run ID: $runId"
+          
+          # Monitor pipeline
+          while true; do
+            status=$(az datafactory pipeline-run show \
+              --factory-name "$(dataFactoryName)" \
+              --resource-group "$(resourceGroup)" \
+              --run-id "$runId" \
+              --query 'status' -o tsv)
+            
+            echo "ADF Status: $status"
+            
+            if [[ "$status" == "Succeeded" ]]; then break
+            elif [[ "$status" == "Failed" ]]; then exit 1
+            fi
+            sleep 30
+          done
+
+    - script: |
+        echo "$ADF_RUN_ID" > adf_run_id.txt
+      displayName: "Save ADF Run ID"
+    
+    - publish: adf_run_id.txt
+      artifact: adf-run-id
+
+- stage: ProcessRawDataInDatabricks
+  displayName: '⚡ Process Raw Data in Databricks'
+  dependsOn: RunADFPipeline
+  variables:
+    - group: databricks-secrets
+  jobs:
+  - job: ProcessRawDataInDatabricks
+    steps:
+    - checkout: self
+    - download: current
+      artifact: adf-run-id
+    - script: |
+        set -e  # Exit immediately on error
+        set -x  # Enable debug logging
+
+        export DATABRICKS_HOST="https://$databricksWorkspaceUrl"
+        echo "Using Databricks Host: $DATABRICKS_HOST"
+
+        # Verify working directory structure
+        echo "##[debug]Current directory: $(pwd)"
+        echo "##[debug]Directory contents:"
+        ls -al
+
+        # Get ADF Run ID
+        runId=$(cat $(Pipeline.Workspace)/adf-run-id/adf_run_id.txt)
+        echo "Using ADF Run ID: $runId"
+        
+        # Install dependencies with explicit path
+        sudo apt update && sudo apt install -y python3-pip
+        # Upgrade dependencies and configure CLI
+        sudo python3 -m pip install --upgrade "urllib3>=1.26.0" chardet databricks-cli jq
+        databricks jobs configure --version=2.1
+        export PATH="/root/.local/bin:$PATH"
+        
+        # Verify notebook file exists
+        NOTEBOOK_PATH="$(System.DefaultWorkingDirectory)/process_data.py"
+        echo "##[debug]Notebook path: $NOTEBOOK_PATH"
+        if [ ! -f "$NOTEBOOK_PATH" ]; then
+          echo "##[error]Notebook file not found at $NOTEBOOK_PATH"
+          exit 1
+        fi
+        
+        # Upload Python script as notebook
+        echo "##[section]Uploading notebook to Databricks..."
+        databricks workspace import --format SOURCE --language PYTHON --overwrite "$NOTEBOOK_PATH" "/Shared/process_data"
+        
+        # Create and run job
+        echo "##[section]Submitting Databricks job..."
+        # Updated jobJson section using existing cluster
+        jobJson=$(cat <<EOF
+        {
+          "name": "NYC Taxi Data Cleaning",
+          "existing_cluster_id": "$(clusterId)",
+          "notebook_task": {
+            "notebook_path": "/Shared/process_data",
+            "base_parameters": {
+              "storage_account_name": "$(storageAccountName)",
+              "storage_account_key": "$(STORAGE_ACCOUNT_KEY)",
+              "raw_container": "nyc-taxi-raw",
+              "synapse_endpoint": "$(synapseSQLEndpoint)",
+              "synapse_database": "nyctaxipool"
+            }
+          }
+        }
+        EOF
+        )
+        
+        # Submit job with error handling
+        jobId=$(databricks jobs create --json "$jobJson" | jq -r .job_id) || {
+            echo "##[error]Failed to create job";
+            exit 1;
+        }
+
+        runId=$(databricks jobs run-now --job-id $jobId | jq -r .run_id) || {
+            echo "##[error]Failed to start job";
+            exit 1;
+        }
+        
+        # Monitor job execution with proper timeout
+        echo "##[section]Monitoring job execution..."
+        timeout=1200  # 60 minutes
+        start_time=$(date +%s)
+        while :; do
+          current_time=$(date +%s)
+          elapsed=$((current_time - start_time))
+          
+          status=$(databricks runs get --run-id $runId | jq -r '.state.life_cycle_state')
+          result=$(databricks runs get --run-id $runId | jq -r '.state.result_state')
+          
+          echo "Databricks Status: $status | Result: $result | Elapsed: ${elapsed}s"
+          
+          if [[ "$status" == "TERMINATED" ]]; then
+            if [[ "$result" != "SUCCESS" ]]; then exit 1; fi
+            break
+          fi
+          
+          if (( elapsed > timeout )); then
+            echo "##[error]Timeout after 60 minutes"
+            exit 1
+          fi
+          sleep 30
+        done
+        
+        echo "##[section]Cleaning up notebook..."
+        databricks workspace delete /Shared/process_data
+      displayName: 'Run Cleaning Notebook'
+      env:
+        dbToken: $(dbToken)
+        databricksWorkspaceUrl: $(databricksWorkspaceUrl)
+        DATABRICKS_TOKEN: $(dbToken)
+        STORAGE_ACCOUNT_KEY: $(STORAGE_ACCOUNT_KEY) 
+
+- stage: ExportToSynapse
+  displayName: '📤 Export Clean Data to Synapse'
+  dependsOn: ProcessRawDataInDatabricks
+  variables:
+    - group: databricks-secrets
+  jobs:
+  - job: ExportToSynapse
+    steps:
+    - checkout: self
+    - script: |
+        set -e  # Exit immediately on error
+        set -x  # Enable debug logging
+
+        export DATABRICKS_HOST="https://$databricksWorkspaceUrl"
+        echo "Using Databricks Host: $DATABRICKS_HOST"
+
+        # Verify working directory structure
+        echo "##[debug]Current directory: $(pwd)"
+        echo "##[debug]Directory contents:"
+        ls -al
+
+        # Get ADF Run ID
+        runId=$(cat $(Pipeline.Workspace)/adf-run-id/adf_run_id.txt)
+        echo "Using ADF Run ID: $runId"
+        
+        # Install dependencies with explicit path
+        sudo apt update && sudo apt install -y python3-pip
+        # Upgrade dependencies and configure CLI
+        sudo python3 -m pip install --upgrade "urllib3>=1.26.0" chardet databricks-cli jq
+        databricks jobs configure --version=2.1
+        export PATH="/root/.local/bin:$PATH"
+
+        # Verify notebook file exists
+        NOTEBOOK_PATH="$(System.DefaultWorkingDirectory)/export_to_synapse.py"
+        echo "##[debug]Notebook path: $NOTEBOOK_PATH"
+        if [ ! -f "$NOTEBOOK_PATH" ]; then
+          echo "##[error]Notebook file not found at $NOTEBOOK_PATH"
+          exit 1
+        fi
+
+        # Upload and run Synapse notebook
+        SYNAPSE_NOTEBOOK_PATH="$(System.DefaultWorkingDirectory)/export_to_synapse.py"
+        databricks workspace import --format SOURCE --language PYTHON --overwrite \
+          "$SYNAPSE_NOTEBOOK_PATH" "/Shared/export_to_synapse"
+
+        jobJson=$(cat <<EOF
+        {
+          "name": "Synapse Data Export",
+          "existing_cluster_id": "$(clusterId)",
+          "notebook_task": {
+            "notebook_path": "/Shared/export_to_synapse",
+            "base_parameters": {
+              "synapse_endpoint": "$(synapseSQLEndpoint)",
+              "synapse_database": "nyctaxipool",
+              "jdbc_username": "$(SYNAPSE_USER)",
+              "jdbc_password": "$(SYNAPSE_PASSWORD)",
+              "storage_account_name": "$(storageAccountName)",
+              "storage_account_key": "$(STORAGE_ACCOUNT_KEY)"
+            }
+          }
+        }
+        EOF
+        )
+        
+        # Execute and monitor job
+        jobId=$(databricks jobs create --json "$jobJson" | jq -r .job_id)
+        runId=$(databricks jobs run-now --job-id $jobId | jq -r .run_id)
+        
+        timeout=900
+        start_time=$(date +%s)
+        while :; do
+          status=$(databricks runs get --run-id $runId | jq -r '.state.life_cycle_state')
+          [[ "$status" == "TERMINATED" ]] && break
+          sleep 30
+        done
+        
+        databricks workspace delete /Shared/export_to_synapse
+      displayName: 'Run Synapse Export'
+      env:
+        databricksWorkspaceUrl: $(databricksWorkspaceUrl)
+        DATABRICKS_TOKEN: $(dbToken)
+        SYNAPSE_USER: $(SYNAPSE_USER)
+        SYNAPSE_PASSWORD: $(SYNAPSE_PASSWORD)
+        STORAGE_ACCOUNT_KEY: $(STORAGE_ACCOUNT_KEY)
+
+- stage: ExecuteSynapseSQLForDataModeling
+  displayName: '💻 Execute Synapse SQL For Data Modeling'
+  dependsOn: ExportToSynapse
+  variables:
+    - group: databricks-secrets  # Contains SYNAPSE_USER/SYNAPSE_PASSWORD
+  jobs:
+  - job: ExecuteSynapseSQLForDataModeling
+    steps:
+    - checkout: self  # Ensure SQL scripts are in repo
+
+    - task: CmdLine@2
+      displayName: 'Install sqlcmd'
+      inputs:
+        script: |
+          curl https://packages.microsoft.com/keys/microsoft.asc | sudo apt-key add -
+          curl https://packages.microsoft.com/config/ubuntu/20.04/prod.list | sudo tee /etc/apt/sources.list.d/msprod.list
+          sudo apt-get update
+          sudo ACCEPT_EULA=Y apt-get install -y mssql-tools unixodbc-dev
+
+    - task: CmdLine@2
+      displayName: 'Execute Schema Scripts'
+      inputs:
+        script: |
+          # Ensure sqlcmd path is available in this shell
+          export PATH="$PATH:/opt/mssql-tools/bin"
+
+          echo "Current directory: $(pwd)"
+          echo "Directory contents:"
+          ls -al ./sql
+
+          # Execute SQL scripts in sequence
+          sqlcmd -S $(synapseSQLEndpoint) -d nyctaxipool -U $(SYNAPSE_USER) -P $(SYNAPSE_PASSWORD) -I -i ./sql/create_taxi_zone_lookup.sql
+          sqlcmd -S $(synapseSQLEndpoint) -d nyctaxipool -U $(SYNAPSE_USER) -P $(SYNAPSE_PASSWORD) -I -i ./sql/create_staging_tables.sql
+          sqlcmd -S $(synapseSQLEndpoint) -d nyctaxipool -U $(SYNAPSE_USER) -P $(SYNAPSE_PASSWORD) -I -i ./sql/create_fact_trip.sql
+          sqlcmd -S $(synapseSQLEndpoint) -d nyctaxipool -U $(SYNAPSE_USER) -P $(SYNAPSE_PASSWORD) -I -i ./sql/create_view_monthly_revenue.sql
+      env:
+        SYNAPSE_USER: $(SYNAPSE_USER)
+        SYNAPSE_PASSWORD: $(SYNAPSE_PASSWORD)
