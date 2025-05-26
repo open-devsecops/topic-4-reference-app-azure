@@ -6,9 +6,9 @@ pool:
   
 variables:
   resourceGroup: 'rg-nyc-taxi'
-  dataFactoryName: 'adf-nyc-taxi-25'
+  dataFactoryName: 'CHANGE_TO_YOUR_DATA_FACTORY_NAME'
   pipelineName: 'CopyNYCTaxiData'
-  storageAccountName: 'nyctaxistoragedataops'
+  storageAccountName: 'CHANGE_TO_YOUR_STORAGE_ACCOUNT_NAME'
   synapseSQLEndpoint: 'synapse-nyctaxi-test.sql.azuresynapse.net'
 
 stages:
