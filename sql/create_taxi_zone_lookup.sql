@@ -7,7 +7,7 @@ CREATE TABLE dbo.taxi_zone_lookup (
 
 ----------------------------------
 COPY INTO dbo.taxi_zone_lookup
-FROM 'https://nyctaxistoragedataops.blob.core.windows.net/nyc-taxi-raw/taxi_zone_lookup.csv'
+FROM 'https://<ADD_STORAGE_ACCOUNT_NAME>.blob.core.windows.net/nyc-taxi-raw/taxi_zone_lookup.csv'
 WITH (
  FILE_TYPE = 'CSV',
  FIRSTROW = 2,
@@ -20,3 +20,5 @@ WITH (
 ----------------------------------
 Select * from dbo.taxi_zone_lookup
 order by LocationID
+
+
