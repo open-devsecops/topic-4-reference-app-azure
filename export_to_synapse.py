@@ -10,7 +10,7 @@ spark.conf.set(
 
 # Synapse configuration
 jdbc_url = (
-    "jdbc:sqlserver://synapse-nyctaxi-test.sql.azuresynapse.net:1433;"
+    "jdbc:sqlserver://synapse-nyctaxi.sql.azuresynapse.net:1433;"
     "database=nyctaxipool;"
     "encrypt=true;"
     "trustServerCertificate=false;"
@@ -18,8 +18,6 @@ jdbc_url = (
     "loginTimeout=30;"
 )
 
-# jdbc_username = "sqladminuser"
-# jdbc_password = "wxy12345!"
 temp_dir = f"wasbs://synapse-temp@{storage_account_name}.blob.core.windows.net/tempdir"
 
 def write_to_synapse(df, table_name, processed_path):
