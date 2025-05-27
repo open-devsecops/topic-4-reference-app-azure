@@ -9,7 +9,7 @@ variables:
   dataFactoryName: 'CHANGE_TO_YOUR_DATA_FACTORY_NAME'
   pipelineName: 'CopyNYCTaxiData'
   storageAccountName: 'CHANGE_TO_YOUR_STORAGE_ACCOUNT_NAME'
-  synapseSQLEndpoint: 'synapse-nyctaxi.sql.azuresynapse.net'
+  synapseSQLEndpoint: '<ADD_YOUR_SYNAPSE_WORKSPACE_NAME>.sql.azuresynapse.net'
 
 stages:
 - stage: RunADFPipeline

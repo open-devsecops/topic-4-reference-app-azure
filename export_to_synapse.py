@@ -10,7 +10,7 @@ spark.conf.set(
 
 # Synapse configuration
 jdbc_url = (
-    "jdbc:sqlserver://synapse-nyctaxi.sql.azuresynapse.net:1433;"
+    "jdbc:sqlserver://<ADD_YOUR_SYNAPSE_WORKSPACE_NAME>.sql.azuresynapse.net:1433;"
     "database=nyctaxipool;"
     "encrypt=true;"
     "trustServerCertificate=false;"
