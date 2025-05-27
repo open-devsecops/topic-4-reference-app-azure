@@ -10,6 +10,7 @@ variables:
   pipelineName: 'CopyNYCTaxiData'
   storageAccountName: 'CHANGE_TO_YOUR_STORAGE_ACCOUNT_NAME'
   synapseSQLEndpoint: '<ADD_YOUR_SYNAPSE_WORKSPACE_NAME>.sql.azuresynapse.net'
+  synapseWorkspaceName: 'CHANGE_TO_YOUR_SYNAPSE_WORKSPACE_NAME'
 
 stages:
 - stage: RunADFPipeline
@@ -226,7 +227,8 @@ stages:
               "jdbc_username": "$(SYNAPSE_USER)",
               "jdbc_password": "$(SYNAPSE_PASSWORD)",
               "storage_account_name": "$(storageAccountName)",
-              "storage_account_key": "$(STORAGE_ACCOUNT_KEY)"
+              "storage_account_key": "$(STORAGE_ACCOUNT_KEY)",
+              "synapse_workspace_name": "$(synapseWorkspaceName)"
             }
           }
         }

@@ -2,6 +2,7 @@ storage_account_name = dbutils.widgets.get("storage_account_name")  # Add this l
 storage_account_key = dbutils.widgets.get("storage_account_key")
 jdbc_username = dbutils.widgets.get("jdbc_username")
 jdbc_password = dbutils.widgets.get("jdbc_password")
+synapse_workspace_name = dbutils.widgets.get("synapse_workspace_name")
 
 spark.conf.set(
     f"fs.azure.account.key.{storage_account_name}.blob.core.windows.net",
@@ -10,7 +11,7 @@ spark.conf.set(
 
 # Synapse configuration
 jdbc_url = (
-    "jdbc:sqlserver://<ADD_YOUR_SYNAPSE_WORKSPACE_NAME>.sql.azuresynapse.net:1433;"
+    f"jdbc:sqlserver://{synapse_workspace_name}.sql.azuresynapse.net:1433;"
     "database=nyctaxipool;"
     "encrypt=true;"
     "trustServerCertificate=false;"
