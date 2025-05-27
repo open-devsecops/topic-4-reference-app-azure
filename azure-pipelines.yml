@@ -288,7 +288,7 @@ stages:
           sqlcmd -S $(synapseSQLEndpoint) -d nyctaxipool -U $(SYNAPSE_USER) -P $(SYNAPSE_PASSWORD) -I -i ./sql/create_taxi_zone_lookup.sql
           sqlcmd -S $(synapseSQLEndpoint) -d nyctaxipool -U $(SYNAPSE_USER) -P $(SYNAPSE_PASSWORD) -I -i ./sql/create_staging_tables.sql
           sqlcmd -S $(synapseSQLEndpoint) -d nyctaxipool -U $(SYNAPSE_USER) -P $(SYNAPSE_PASSWORD) -I -i ./sql/create_fact_trip.sql
-          sqlcmd -S $(synapseSQLEndpoint) -d nyctaxipool -U $(SYNAPSE_USER) -P $(SYNAPSE_PASSWORD) -I -i ./sql/create_view_monthly_revenue.sql
+          sqlcmd -S $(synapseSQLEndpoint) -d nyctaxipool -U $(SYNAPSE_USER) -P $(SYNAPSE_PASSWORD) -I -i ./sql/create_monthly_zone_revenue.sql
       env:
         SYNAPSE_USER: $(SYNAPSE_USER)
         SYNAPSE_PASSWORD: $(SYNAPSE_PASSWORD)
